@@ -31,6 +31,47 @@
 
 namespace livox_ros {
 
+namespace {
+
+void RotateImuVectors(ImuData& imu_data, const ExtParameter& extrinsic) {
+  const double roll = static_cast<double>(extrinsic.roll) * PI / 180.0;
+  const double pitch = static_cast<double>(extrinsic.pitch) * PI / 180.0;
+  const double yaw = static_cast<double>(extrinsic.yaw) * PI / 180.0;
+
+  const double cos_roll = cos(roll);
+  const double cos_pitch = cos(pitch);
+  const double cos_yaw = cos(yaw);
+  const double sin_roll = sin(roll);
+  const double sin_pitch = sin(pitch);
+  const double sin_yaw = sin(yaw);
+
+  const double rotation[3][3] = {
+    {cos_pitch * cos_yaw,
+     sin_roll * sin_pitch * cos_yaw - cos_roll * sin_yaw,
+     cos_roll * sin_pitch * cos_yaw + sin_roll * sin_yaw},
+    {cos_pitch * sin_yaw,
+     sin_roll * sin_pitch * sin_yaw + cos_roll * cos_yaw,
+     cos_roll * sin_pitch * sin_yaw - sin_roll * cos_yaw},
+    {-sin_pitch, sin_roll * cos_pitch, cos_roll * cos_pitch},
+  };
+
+  const float gyro_x = imu_data.gyro_x;
+  const float gyro_y = imu_data.gyro_y;
+  const float gyro_z = imu_data.gyro_z;
+  const float acc_x = imu_data.acc_x;
+  const float acc_y = imu_data.acc_y;
+  const float acc_z = imu_data.acc_z;
+
+  imu_data.gyro_x = rotation[0][0] * gyro_x + rotation[0][1] * gyro_y + rotation[0][2] * gyro_z;
+  imu_data.gyro_y = rotation[1][0] * gyro_x + rotation[1][1] * gyro_y + rotation[1][2] * gyro_z;
+  imu_data.gyro_z = rotation[2][0] * gyro_x + rotation[2][1] * gyro_y + rotation[2][2] * gyro_z;
+  imu_data.acc_x = rotation[0][0] * acc_x + rotation[0][1] * acc_y + rotation[0][2] * acc_z;
+  imu_data.acc_y = rotation[1][0] * acc_x + rotation[1][1] * acc_y + rotation[1][2] * acc_z;
+  imu_data.acc_z = rotation[2][0] * acc_x + rotation[2][1] * acc_y + rotation[2][2] * acc_z;
+}
+
+}  // namespace
+
 std::atomic<bool> PubHandler::is_timestamp_sync_;
 
 PubHandler &pub_handler() {
@@ -122,6 +163,15 @@ void PubHandler::OnLivoxLidarPointCloudCallback(uint32_t handle, const uint8_t d
       imu_data.acc_x = imu->acc_x;
       imu_data.acc_y = imu->acc_y;
       imu_data.acc_z = imu->acc_z;
+
+      uint32_t id = 0;
+      if (GetLidarId(static_cast<LidarProtoType>(imu_data.lidar_type), handle, id)) {
+        std::unique_lock<std::mutex> lock(self->packet_mutex_);
+        const auto extrinsic = self->lidar_extrinsics_.find(id);
+        if (extrinsic != self->lidar_extrinsics_.end()) {
+          RotateImuVectors(imu_data, extrinsic->second.param);
+        }
+      }
       self->imu_callback_(&imu_data, self->imu_client_data_);
     }
     return;
